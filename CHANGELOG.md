@@ -31,6 +31,10 @@ the version numbers [Semantic Versioning](https://semver.org/).
 - New backups record what they hold: the number of tracks, playlists, hot
   cues and memory cues, and the size of each part. RBXport Restore shows this
   before restoring, so the right backup is easy to pick.
+- Analysis can add a memory cue on the first beat of the new beat grid. Turn
+  it on in Preferences › Analysis for every analysis, including automatic
+  ones, or for one batch in Analysis Setting. A track that already has a
+  memory cue on that beat does not get a second one.
 
 ### Changed
 - Restoring a backup moved to the separate RBXport Restore app, which can put
