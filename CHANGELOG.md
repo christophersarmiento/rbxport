@@ -8,6 +8,9 @@ the version numbers [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- A sync keeps the "Background Color : Device Library" set in rekordbox; it
+  used to reset it to Default Color. `export.pdb` now also carries the
+  device name and track count, as rekordbox's does.
 - Related Tracks' BPM + KEY list now matches rekordbox's own preset: tracks
   within 5% of the track's BPM, or of half or double it (so a 174 BPM track
   finds 87 BPM ones), in the same key, its relative or a key either side on
