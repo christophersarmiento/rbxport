@@ -16,6 +16,12 @@ the version numbers [Semantic Versioning](https://semver.org/).
   administrator approval (UAC). The first update after this release still
   asks once, because it installs the signature-checking helper that applies
   later updates.
+- Export Folder now writes the folder with its playlists and intelligent
+  playlists inside it. Previously the device got one empty playlist named
+  after the folder.
+- Sync Manager lists intelligent playlists, and ticking a folder includes
+  them. Playlists and folders created while Sync Manager is open now appear
+  without reopening it.
 - Connecting a USB only refreshes the device list. Automatic history and
   settings imports now wait until SYNC is clicked in Sync Manager, before
   exporting to the selected devices. Device discovery no longer runs export
