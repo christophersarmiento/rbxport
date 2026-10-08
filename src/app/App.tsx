@@ -2535,6 +2535,7 @@ function AppBody() {
       ) : null}
       {analysisSelection !== null ? (
         <AnalysisDialog count={analysisSelection.length} initialMode={analysisPrefs.mode}
+          initialFirstBeatCue={analysisPrefs.firstBeatCue}
           onCancel={() => setAnalysisSelection(null)}
           onConfirm={settings => {
             if (readOnly) { refuse(ANALYSIS_REFUSED); return; }
