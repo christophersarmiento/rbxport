@@ -115,6 +115,31 @@ pub struct Pdb<'a> {
 
 const PAGE_HEADER_LEN: usize = 0x28;
 
+/// How many entries a data page's row index holds, live or deleted.
+///
+/// `0x18..0x1b` is one little-endian 24-bit field: the row-index length in
+/// the low 13 bits and the live-row count in the high 11. rekordbox fills
+/// it on every page [OBS: a rekordbox 7 USB, playlist-entry pages of 284
+/// rows: the low 13 bits equal `used_size / 12`, the high 11 bits equal the
+/// set presence bits, and `0x22` held unrelated values from 63 to 283].
+/// Reading only the byte at `0x18` and taking `0x22` when it was larger
+/// dropped every row past it on such a page.
+///
+/// rbxport's own writer, until it is corrected, stores a page of more than
+/// 255 rows with this field stuck at 255 and the true count in `0x22`. That
+/// one shape is still read from `0x22`, so a stick it wrote reads as
+/// before.
+fn row_index_len(page: &[u8]) -> u32 {
+    let packed = u32::from(u1(page, 0x18)) | u32::from(u1(page, 0x19)) << 8 | u32::from(u1(page, 0x1a)) << 16;
+    let index_len = packed & 0x1fff;
+    let written_by_rbxport = u32::from(u2(page, 0x22));
+    if index_len == 0xff && written_by_rbxport > 0xff && written_by_rbxport != 0x1fff {
+        written_by_rbxport
+    } else {
+        index_len
+    }
+}
+
 fn u1(b: &[u8], at: usize) -> u8 {
     b.get(at).copied().unwrap_or(0)
 }
@@ -179,13 +204,7 @@ impl<'a> Pdb<'a> {
 
             let page_flags = u1(p, 0x1b);
             let is_data_page = page_flags & 0x40 == 0;
-            let num_rows_small = u32::from(u1(p, 0x18));
-            let num_rows_large = u32::from(u2(p, 0x22));
-            let num_rows = if num_rows_large > num_rows_small && num_rows_large != 0x1fff {
-                num_rows_large
-            } else {
-                num_rows_small
-            };
+            let num_rows = row_index_len(p);
 
             if is_data_page && num_rows > 0 {
                 let groups = (num_rows - 1) / 16 + 1;

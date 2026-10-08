@@ -8,6 +8,10 @@ the version numbers [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- A USB that rekordbox exported no longer reads as missing playlist
+  entries. Pages of more than 255 entries were cut short, so a playlist
+  could look empty or short, and the first sync to such a USB could be
+  refused because its two device libraries seemed to disagree.
 - Related Tracks' BPM + KEY list now matches rekordbox's own preset: tracks
   within 5% of the track's BPM, or of half or double it (so a 174 BPM track
   finds 87 BPM ones), in the same key, its relative or a key either side on

@@ -125,6 +125,75 @@ fn deleted_rows_are_skipped() {
     assert_eq!(names, vec!["Kept".to_owned(), "AlsoKept".to_owned()]);
 }
 
+/// A one-table file around `page`, a playlist-entries page at index 1.
+fn entries_file(page: Vec<u8>) -> Vec<u8> {
+    let mut file = vec![0_u8; PAGE];
+    file[0x04..0x08].copy_from_slice(&(PAGE as u32).to_le_bytes());
+    file[0x08..0x0c].copy_from_slice(&1_u32.to_le_bytes());
+    file[28..32].copy_from_slice(&8_u32.to_le_bytes()); // page type playlist entries
+    file[36..40].copy_from_slice(&1_u32.to_le_bytes()); // first page
+    file[40..44].copy_from_slice(&1_u32.to_le_bytes()); // last page
+    file.extend_from_slice(&page);
+    file
+}
+
+/// A full playlist-entries page: 284 twelve-byte rows, as rekordbox packs them.
+fn full_entries_page() -> Vec<u8> {
+    let mut builder = PageBuilder::new(PAGE, 1, 8, 0);
+    for i in 1..=284_u32 {
+        builder.push_row(&rbl_pdb::rows::playlist_entry_row(i, 1000 + i, 7));
+    }
+    builder.finish()
+}
+
+#[test]
+fn a_rekordbox_page_of_more_than_255_rows_reads_every_row() {
+    // The header as a rekordbox 7 export has it on a full entries page
+    // [OBS]: the 24-bit field at 0x18 holds 284 index entries and 284 live
+    // rows, 0x20 is 1, and 0x22 is unrelated to the row count.
+    let mut page = full_entries_page();
+    let packed: u32 = 284 | 284 << 13;
+    page[0x18..0x1b].copy_from_slice(&packed.to_le_bytes()[..3]);
+    page[0x20..0x22].copy_from_slice(&1_u16.to_le_bytes());
+    page[0x22..0x24].copy_from_slice(&63_u16.to_le_bytes());
+    let file = entries_file(page);
+    let pdb = Pdb::parse(&file).unwrap();
+    let entries = pdb.playlist_entries(pdb.table(PageType::PlaylistEntries).unwrap());
+    assert_eq!(entries.len(), 284, "the rows past 0xff and past 0x22 are not dropped");
+    assert_eq!((entries[283].entry_index, entries[283].track_id), (284, 1284));
+}
+
+#[test]
+fn a_rekordbox_page_with_deleted_rows_keeps_its_whole_index() {
+    // rekordbox leaves a deleted row's index entry behind: 284 entries, of
+    // which 273 are live, and the presence bits say which.
+    let mut page = full_entries_page();
+    let packed: u32 = 284 | 273 << 13;
+    page[0x18..0x1b].copy_from_slice(&packed.to_le_bytes()[..3]);
+    page[0x22..0x24].copy_from_slice(&117_u16.to_le_bytes());
+    // The last group holds rows 272..=283: clear its first eleven.
+    let flags_at = PAGE - 17 * 0x24 - 4;
+    let present = u16::from_le_bytes([page[flags_at], page[flags_at + 1]]) & !0b111_1111_1111;
+    page[flags_at..flags_at + 2].copy_from_slice(&present.to_le_bytes());
+    let file = entries_file(page);
+    let pdb = Pdb::parse(&file).unwrap();
+    let entries = pdb.playlist_entries(pdb.table(PageType::PlaylistEntries).unwrap());
+    assert_eq!(entries.len(), 273);
+    assert_eq!(entries.last().map(|e| e.entry_index), Some(284), "the live row after the deleted ones is read");
+}
+
+#[test]
+fn a_page_rbxport_wrote_with_more_than_255_rows_still_reads_whole() {
+    // The builder's own header for such a page: 0x18 stuck at 255 and the
+    // count in 0x22. Sticks it already wrote must read as they did.
+    let page = full_entries_page();
+    assert_eq!(page[0x18], 0xff);
+    assert_eq!(u16::from_le_bytes([page[0x22], page[0x23]]), 284);
+    let file = entries_file(page);
+    let pdb = Pdb::parse(&file).unwrap();
+    assert_eq!(pdb.playlist_entries(pdb.table(PageType::PlaylistEntries).unwrap()).len(), 284);
+}
+
 #[test]
 fn rejects_files_that_are_not_devicesql() {
     assert!(Pdb::parse(&[]).is_err());

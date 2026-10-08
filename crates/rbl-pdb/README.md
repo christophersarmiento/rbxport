@@ -22,7 +22,7 @@ The [manifest](Cargo.toml) lists dependencies and feature flags.
 
 ## Contracts and safety
 
-Presence bits determine which row offsets are live; deleted rows may leave offsets behind. Keep page bounds, string pointers, and row layouts covered by round-trip tests. Successful parsing does not prove a player accepts an export.
+Presence bits determine which row offsets are live; deleted rows may leave offsets behind. A data page's row-index length is the low 13 bits of the 24-bit field at `0x18`, which rekordbox fills on pages of any size; `row_index_len` in `lib.rs` documents the evidence and the one rbxport-written shape still read from `0x22`. Keep page bounds, string pointers, and row layouts covered by round-trip tests. Successful parsing does not prove a player accepts an export.
 
 ## Run focused checks
 
