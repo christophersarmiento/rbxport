@@ -25,6 +25,9 @@ the version numbers [Semantic Versioning](https://semver.org/).
   recovery.
 
 ### Added
+- A device's General tab sets "Background Color : OneLibrary" and
+  "Background Color : Device Library", which used to show "Default Color"
+  and could not be changed. Each is written where rekordbox keeps it.
 - Right-clicking the rbxport version in the status bar opens the current log
   in the operating system's default log viewer.
 - On a computer with no rekordbox library, the app asks whether to create a

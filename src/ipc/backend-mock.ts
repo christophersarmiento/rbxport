@@ -2506,6 +2506,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         hasOneLibrary: true,
         hasLibrarySettings: true,
         hasDevSetting: true,
+        deviceLibraryBackgroundColorType: current.deviceLibraryBackgroundColorType ?? 0,
         waveformColor: defaults?.waveformColor ?? current.waveformColor,
         waveformPosition: defaults?.waveformPosition ?? current.waveformPosition,
         overviewWaveform: defaults?.overviewWaveform ?? current.overviewWaveform,
