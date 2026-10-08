@@ -12,6 +12,10 @@ the version numbers [Semantic Versioning](https://semver.org/).
   entries. Pages of more than 255 entries were cut short, so a playlist
   could look empty or short, and the first sync to such a USB could be
   refused because its two device libraries seemed to disagree.
+- Track ratings on a USB that rekordbox exported now read correctly, and
+  exports write them the way rekordbox does. They were read as 0 stars,
+  which also made the first sync to such a USB see disagreeing libraries.
+  USBs that earlier versions exported still read with their ratings.
 - Related Tracks' BPM + KEY list now matches rekordbox's own preset: tracks
   within 5% of the track's BPM, or of half or double it (so a 174 BPM track
   finds 87 BPM ones), in the same key, its relative or a key either side on

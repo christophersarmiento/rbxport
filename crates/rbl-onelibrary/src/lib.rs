@@ -30,6 +30,27 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// `content.rating` for a track of `stars` (0 to 5): the star count itself.
+///
+/// rekordbox writes stars here, as `export.pdb` and `master.db` hold them
+/// [OBS: a rekordbox 7 USB of 1,373 tracks, values 0, 2, 3, 4 and 5, each
+/// equal to the same track's `export.pdb` rating]. One stick is the whole
+/// of that evidence. The 0/51/…/255 scale is rekordbox XML's, not this
+/// database's.
+pub fn rating_from_stars(stars: u8) -> i64 {
+    i64::from(stars.min(5))
+}
+
+/// Stars, 0 to 5, from `content.rating`.
+///
+/// Up to 5 is a star count, as rekordbox writes it. Above that is the
+/// 0/51/…/255 scale rbxport wrote before [`rating_from_stars`], read back
+/// as stars so a stick it exported still reads as it did.
+pub fn stars_from_rating(rating: i64) -> u8 {
+    let stars = if rating <= 5 { rating } else { rating / 51 };
+    u8::try_from(stars.clamp(0, 5)).unwrap_or(0)
+}
+
 /// Applies the cipher settings a rekordbox database needs, in the order it
 /// needs them: the cipher and the legacy mode before the key, or the key is
 /// interpreted under the wrong parameters and the first read fails.

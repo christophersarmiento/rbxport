@@ -881,6 +881,7 @@ specified below. Exported file type always describes the destination audio.
 
 | Source value | DeviceSQL target | OneLibrary content target |
 |---|---|---|
+| Rating, 0–5 stars | u8 `0x59` | `rating`, the same 0–5 [OBS: one rekordbox 7 USB, every track equal in both databases]. Values above 5 are read as the 0/51/…/255 scale earlier RBXport exports wrote. |
 | TrackNo | u32 `0x34` | `trackNo` |
 | DiscNo | u16 `0x4c` | `discNo` |
 | BitDepth | u16 `0x52` | `bitDepth` |

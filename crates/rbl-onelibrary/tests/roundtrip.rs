@@ -40,7 +40,7 @@ fn built() -> (tempfile::TempDir, std::path::PathBuf) {
                 file_name: format!("Track {i}.mp3"),
                 file_size: 9_000_000,
                 analysis_path: format!("/PIONEER/USBANLZ/P001/0000000{i}/ANLZ0000.DAT"),
-                rating: 153,
+                rating: rbl_onelibrary::rating_from_stars(3),
                 comment: "5A - Am - 128".to_owned(),
                 date_added: "2026-09-07".to_owned(),
                 ..Track::default()
@@ -109,7 +109,7 @@ fn tracks_read_back_exactly_as_written() {
     assert_eq!(title, "Track 1");
     assert_eq!(bpm, 12_801);
     assert_eq!(path_text, "/Contents/ARTBAT/Track 1.mp3");
-    assert_eq!(rating, 153, "three stars, as multiples of 51");
+    assert_eq!(rating, 3, "three stars, as rekordbox writes them");
     assert_eq!(comment, "5A - Am - 128");
 
     // The search column is filled from the title, as the reference does.
@@ -313,4 +313,19 @@ fn unfinished_builder_never_publishes_a_partial_database() {
     let builder = Builder::create(&path).unwrap();
     builder.finish("Device", "2026-09-21", 1).unwrap();
     assert!(ExportLibrary::open_read_only(&path).is_ok());
+}
+
+#[test]
+fn ratings_are_stars_and_the_old_scale_still_reads() {
+    use rbl_onelibrary::{rating_from_stars, stars_from_rating};
+    // rekordbox writes the star count [OBS: one rekordbox 7 USB].
+    assert_eq!((0..=5).map(rating_from_stars).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5]);
+    assert_eq!(rating_from_stars(9), 5);
+    for stars in 0..=5 {
+        assert_eq!(stars_from_rating(i64::from(stars)), stars);
+        // What rbxport wrote before: 0, 51, ..., 255.
+        assert_eq!(stars_from_rating(i64::from(stars) * 51), stars);
+    }
+    assert_eq!(stars_from_rating(-1), 0);
+    assert_eq!(stars_from_rating(1_000), 5);
 }

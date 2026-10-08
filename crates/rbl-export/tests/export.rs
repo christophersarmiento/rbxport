@@ -285,6 +285,18 @@ fn an_export_carries_a_readable_export_library_beside_the_pdb() {
         .unwrap();
     assert!(audio.starts_with("/Contents/"), "{audio}");
     assert!(dir.path().join(audio.trim_start_matches('/')).exists(), "{audio} is not on the stick");
+
+    // Ratings are stars in both, as rekordbox writes them, and read back
+    // the same from either.
+    let rating: i64 = db
+        .connection()
+        .query_row("SELECT rating FROM content WHERE content_id = 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rating, 4);
+    let snapshot = rbl_export::snapshot::Snapshot::read(dir.path()).unwrap();
+    let stars = |library: &rbl_export::snapshot::Library| library.tracks.iter().map(|t| t.rating).collect::<Vec<_>>();
+    assert_eq!(stars(snapshot.one.as_ref().unwrap()), [4, 4]);
+    assert_eq!(stars(snapshot.one.as_ref().unwrap()), stars(snapshot.legacy.as_ref().unwrap()));
 }
 
 #[test]

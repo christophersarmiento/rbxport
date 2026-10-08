@@ -361,7 +361,7 @@ fn read_one_library(db: &rbl_onelibrary::ExportLibrary, out: &mut Snapshot) -> R
                     path: r.get(2)?,
                     analysis: r.get(3)?,
                     bpm: r.get(4)?,
-                    rating: r.get::<_, u32>(5)? / 51,
+                    rating: u32::from(rbl_onelibrary::stars_from_rating(r.get(5)?)),
                     color: r.get(6)?,
                     comment: r.get(7)?,
                 },
