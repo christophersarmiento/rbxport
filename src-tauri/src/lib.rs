@@ -5,6 +5,7 @@
 //! them against a mock app and a fixture library, the way the webview does
 //! against the real one.
 
+pub mod appimage_wayland;
 mod windowfit;
 mod file_drop;
 mod file_drag;
@@ -14,6 +15,8 @@ mod sentry;
 #[cfg(test)]
 mod test_stick;
 pub mod analysis;
+mod analysis_extensions;
+mod analysis_pipeline;
 pub mod commands;
 mod usb_import;
 pub mod cues;
@@ -446,6 +449,14 @@ pub fn run() {
                 Err(e) => tracing::warn!(error = %e, "could not read the webview's version"),
             }
             screen_cache::initialize(app.handle());
+            // A write outside the library history (a player over LINK, a cue,
+            // analysis) that ends its Redo branch updates the Edit menu.
+            {
+                let handle = app.handle().clone();
+                app.state::<Arc<AppState>>().on_history_changed(move || {
+                    commands::announce_history(&handle, handle.state::<Arc<AppState>>().inner());
+                });
+            }
             #[cfg(target_os = "macos")]
             if let Some(store) = crate::test_port::data_store() {
                 let config = app.config().app.windows.iter().find(|window| window.label == MAIN_WINDOW)
@@ -546,6 +557,7 @@ pub fn run() {
             commands::track_waveform,
             commands::track_pcm_waveform,
             analysis::analyse_track,
+            analysis::analysis_stages,
             analysis::edit_phrase,
             commands::reload_library,
             // Editing. Every one of these is refused while rekordbox is
@@ -624,6 +636,7 @@ pub fn run() {
             commands::track_phrases,
             commands::track_vocals,
             relocate::missing_tracks,
+            relocate::track_missing,
             relocate::sort_missing_tracks,
             relocate::remove_missing_tracks,
             commands::unanalysed_tracks,
@@ -655,6 +668,7 @@ pub fn run() {
             commands::create_folder,
             commands::rename_playlist,
             commands::move_playlist,
+            commands::sort_playlist_items,
             commands::delete_playlist,
             commands::undo_edit,
             commands::redo_edit,
@@ -714,6 +728,7 @@ pub fn run() {
             explorer::explorer_children,
             device_library::device_libraries,
             device_library::device_playlist_edit,
+            device_library::device_playlist_collection_tracks,
             device_library::device_playlist_duplicates,
             device_library::device_playlist_import,
             device_library::device_playlist_import_plan,
@@ -721,6 +736,7 @@ pub fn run() {
             // lists its dropdowns offer, and the fields it may write.
             details::track_details,
             details::selection_details,
+            details::track_playlists,
             details::track_lookups,
             details::set_track_field,
             details::add_artwork,
@@ -731,6 +747,7 @@ pub fn run() {
             details::create_my_tag,
             details::rename_my_tag,
             details::delete_my_tag,
+            details::write_my_tag_comments,
             details::clear_artwork,
             // AppleScript's way into the window: it says it is listening,
             // answers what a script asked of it, and mirrors the

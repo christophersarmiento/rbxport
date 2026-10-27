@@ -736,7 +736,7 @@ impl<R: Runtime> Tools<R> {
         self.writable()?;
         let id = parse_id(&p.playlist_id, "playlist")?.to_string();
         let count = p.track_ids.len();
-        crate::commands::add_tracks_to_playlist(self.app.clone(), self.app.state(), id, p.track_ids, p.allow_duplicates)
+        crate::commands::add_tracks_to_playlist(self.app.clone(), self.app.state(), id, p.track_ids, p.allow_duplicates, None)
             .await
             .map_err(message)?;
         done(&format!("{count} track(s) sent to the playlist"))

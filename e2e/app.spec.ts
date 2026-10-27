@@ -1532,6 +1532,12 @@ test("each kind of table remembers its own columns", async ({ page }) => {
   // Back to a playlist and the change is still there.
   await page.getByRole("treeitem").filter({ hasText: "Melodic Vox" }).first().click();
   await expect(page.getByRole("columnheader", { name: /^Genre/ })).toBeVisible();
+
+  // A playlist folder is a playlist-type list too and shares the same layout
+  // (TableHeader-PlaylistTracks), not the collection's (#596).
+  await page.getByRole("treeitem").filter({ hasText: "CURRENT" }).first().click();
+  await expect(page.getByTestId("browser-title")).toContainText("CURRENT (");
+  await expect(page.getByRole("columnheader", { name: /^Genre/ })).toBeVisible();
 });
 
 test("analysing a selection reports progress and can be stopped", async ({ page }) => {
@@ -2006,7 +2012,11 @@ test("the detail playhead is pinned to the middle, whatever the track does", asy
 
   const detail = await page.getByTestId("player-detail").boundingBox();
   const head = await page.getByTestId("player-detail-head").boundingBox();
-  expect((head?.x ?? 0) - (detail?.x ?? 0)).toBeCloseTo((detail?.width ?? 0) / 2, 0);
+  // Within half a device pixel of the middle: the head is put on whole device
+  // pixels so it draws solid rather than blended across two (#393).
+  const ratio = await page.evaluate(() => globalThis.devicePixelRatio);
+  expect(Math.abs((head?.x ?? 0) - (detail?.x ?? 0) - (detail?.width ?? 0) / 2)).toBeLessThanOrEqual(0.5 / ratio + 1e-6);
+  expect(((head?.x ?? 0) - (detail?.x ?? 0)) * ratio % 1).toBeCloseTo(0, 6);
 });
 
 test("dragging the detail waveform scrubs, and dragging the overview seeks", async ({ page }) => {
@@ -2469,12 +2479,13 @@ test("beat sync belongs to two decks, and pulls the follower to the master", asy
   const a = page.getByRole("region", { name: "Preview player" }).first();
   const b = page.getByRole("region", { name: "Preview player B" });
 
-  // Deck A is master to begin with, so its own BEAT SYNC has nothing to do.
-  await expect(a.getByRole("button", { name: "Sync master" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await expect(a.getByRole("button", { name: "Beat sync" })).toBeDisabled();
+  // No deck is the master until one plays, as in rekordbox's EXPORT mode;
+  // then the first to play takes it. BEAT SYNC is enabled on both decks.
+  await expect(a.getByRole("button", { name: "Sync master" })).toHaveAttribute("aria-pressed", "false");
+  await expect(b.getByRole("button", { name: "Sync master" })).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: "Play", exact: true }).first().click();
+  await expect(a.getByRole("button", { name: "Sync master" })).toHaveAttribute("aria-pressed", "true");
+  await expect(a.getByRole("button", { name: "Beat sync" })).toBeEnabled();
   await expect(b.getByRole("button", { name: "Beat sync" })).toBeEnabled();
 
   // Syncing B pulls it to A's tempo: 127 against its own 129.
@@ -2485,10 +2496,42 @@ test("beat sync belongs to two decks, and pulls the follower to the master", asy
   const leader = Number(await a.getByTestId("player-bpm").innerText());
   expect(Number(await bpmB.innerText())).toBeCloseTo(leader, 0);
 
-  // And master moves: whichever deck holds it, the other is the one that syncs.
+  // And master moves: B leads with its BEAT SYNC still lit, and A can sync to it.
   await b.getByRole("button", { name: "Sync master" }).click();
-  await expect(b.getByRole("button", { name: "Beat sync" })).toBeDisabled();
+  await expect(b.getByRole("button", { name: "Beat sync" })).toBeEnabled();
+  await expect(b.getByRole("button", { name: "Beat sync" })).toHaveAttribute("aria-pressed", "true");
   await expect(a.getByRole("button", { name: "Beat sync" })).toBeEnabled();
+});
+
+test("deck A's BEAT SYNC follows deck B when B played first (#615)", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("browser-title")).toContainText("Tracks)");
+  await page.getByRole("button", { name: "Layout" }).click();
+  await page.getByRole("menuitemradio", { name: "2 PLAYER" }).click();
+  await page.locator('[role="gridcell"][data-col="title"]').first().dblclick();
+  const cell = page.locator('[role="gridcell"][data-col="title"]').nth(1);
+  await cell.click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "Track" });
+  await menu.getByRole("menuitem", { name: "Load", exact: true }).hover();
+  await menu.getByRole("menuitem", { name: "Load track to player 2" }).click();
+
+  const a = page.getByRole("region", { name: "Preview player" }).first();
+  const b = page.getByRole("region", { name: "Preview player B" });
+  await expect(b.getByTestId("player-title")).not.toHaveText("");
+
+  // B plays first, so B is the master and A is the one that syncs.
+  await page.getByRole("button", { name: "Play", exact: true }).nth(1).click();
+  await expect(b.getByRole("button", { name: "Sync master" })).toHaveAttribute("aria-pressed", "true");
+  await expect(a.getByRole("button", { name: "Sync master" })).toHaveAttribute("aria-pressed", "false");
+
+  const syncA = a.getByRole("button", { name: "Beat sync" });
+  await expect(syncA).toBeEnabled();
+  const bpmA = a.getByTestId("player-bpm");
+  const before = Number(await bpmA.innerText());
+  await syncA.click();
+  await expect(syncA).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(async () => Number(await bpmA.innerText())).not.toBe(before);
+  expect(Number(await bpmA.innerText())).toBeCloseTo(Number(await b.getByTestId("player-bpm").innerText()), 0);
 });
 
 test("BEAT SYNC stays lit and follows the master's tempo until RST or MASTER ends it", async ({
@@ -2523,6 +2566,9 @@ test("BEAT SYNC stays lit and follows the master's tempo until RST or MASTER end
   const resetA = a.getByRole("button", { name: "Reset tempo" });
   const resetB = b.getByRole("button", { name: "Reset tempo" });
   await resetA.click();
+  // A plays first, so A is the master.
+  await page.getByRole("button", { name: "Play", exact: true }).first().click();
+  await expect(a.getByRole("button", { name: "Sync master" })).toHaveAttribute("aria-pressed", "true");
 
   // Lit once pressed, and the follower's own tempo steps are not its to take.
   await sync.click();
@@ -2551,12 +2597,12 @@ test("BEAT SYNC stays lit and follows the master's tempo until RST or MASTER end
   await expect(bpmB).toHaveText(bpmBAtRest);
   await expect(sliderB).toHaveAttribute("aria-disabled", "true");
 
-  // Synced again, then made master: a master follows nobody, so its light goes out.
+  // Synced again, then made master: the light stays, as rekordbox draws it.
   await sync.click();
   await expect(sync).toHaveAttribute("aria-pressed", "true");
   await b.getByRole("button", { name: "Sync master" }).click();
-  await expect(sync).toBeDisabled();
-  await expect(sync).toHaveAttribute("aria-pressed", "false");
+  await expect(sync).toBeEnabled();
+  await expect(sync).toHaveAttribute("aria-pressed", "true");
 
   // MT is the engine's key lock, held per deck.
   const mt = a.getByRole("button", { name: "Master tempo" });

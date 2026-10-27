@@ -3991,6 +3991,8 @@ dependencies = [
  "rbl-index",
  "realfft",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
@@ -4185,6 +4187,8 @@ name = "rbl-index"
 version = "1.9.0"
 dependencies = [
  "crc32fast",
+ "icu_collator",
+ "icu_locale_core",
  "memchr",
  "parking_lot",
  "rbl-core",

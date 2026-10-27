@@ -175,7 +175,8 @@ test("the control row loops the chosen number of beats, and the steps resize it"
 
   // AU: IN starts a two-beat loop from the head; the field and both ends light.
   await row.getByRole("button", { name: "Loop in" }).click();
-  const exit = row.getByRole("button", { name: "Exit loop" });
+  // The length field, by its place: lit it is "Exit loop", unlit "4 beat loop".
+  const exit = row.getByRole("group", { name: "Beat loop length" }).getByRole("button").nth(1);
   await expect(exit).toHaveAttribute("aria-pressed", "true");
   await expect(row.getByRole("button", { name: "Loop out" })).toBeEnabled();
 
@@ -221,7 +222,8 @@ test("a manual loop on the same beats as the last auto beat loop leaves the fiel
 
   // AU: four beats from the head, then OUT exits it.
   await row.getByRole("button", { name: "Loop in" }).click();
-  const exit = row.getByRole("button", { name: "Exit loop" });
+  // The length field, by its place: lit it is "Exit loop", unlit "4 beat loop".
+  const exit = row.getByRole("group", { name: "Beat loop length" }).getByRole("button").nth(1);
   await expect(exit).toHaveAttribute("aria-pressed", "true");
   await row.getByRole("button", { name: "Loop out" }).click();
   await expect(row.getByRole("button", { name: "4 beat loop" })).toHaveAttribute("aria-pressed", "false");
@@ -668,7 +670,9 @@ test("PLAY on a BPM SYNC deck with Q off starts on the master's beat", async ({ 
 });
 
 test("a new track on the master deck hands MASTER to the other deck", async ({ page }) => {
-  const { a, b, titles, bpms, first, toB } = await syncedPair(page);
+  const { a, b, titles, bpms, first, toB, play } = await syncedPair(page);
+  // A plays first, so A is the master [rekordbox 7.2.18 manual p.121].
+  await play.first().click();
   const bpmA = a.getByTestId("player-bpm");
   const bpmB = b.getByTestId("player-bpm");
   const master = Number(bpms[first]);

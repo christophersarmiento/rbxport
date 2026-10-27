@@ -148,14 +148,21 @@ When importing a playlist from a device**:
   fails, the copies it made are removed again. Importing the same playlist
   again uses the earlier copies instead of copying the files a second time.
 - **Ask each import**: rekordbox's question, with how many files would be
-  copied, their size and where they go. OK copies, Cancel imports nothing.
+  copied, their size and where they go. **Change…** picks another folder
+  for the copies, as in rekordbox; OK is unavailable while that folder's
+  drive has too little free space. OK copies, Cancel imports nothing.
 - **Import only already-matched tracks**: the track is left out and the note
   says how many were. If none of the tracks are in the collection, nothing
   is imported.
 - **Cancel when any track is missing**: nothing is imported, and the note
   says how many tracks are missing.
 
-A copied track is imported from its file's tags. The stick is only read.
+A copied track comes in with what the stick knows of it, as in rekordbox:
+its BPM and key, its waveforms and beat grid (the stick's analysis files,
+copied into your library), and its hot cues, memory cues and loops. Its
+other details come from the file's tags. A track the stick never analysed
+takes the stick's BPM and key only. Tracks already in your collection are
+left as they are. The stick is only read.
 
 ## Music already on the device
 
@@ -186,6 +193,8 @@ and ALAC, is converted to the selected output format:
 | MP3 | 320 kbps CBR, 44.1 kHz, stereo; smaller files with lossy compression. |
 
 Compatible MP3 and integer PCM WAV/AIFF at 44.1 or 48 kHz are copied as-is.
+An AIFF-C file that labels plain PCM with `in24`, `in32`, `FL32` or `FL64`
+plays and analyzes, and is converted rather than copied.
 Selecting MP3 does not recompress a compatible WAV or MP3. This targets older
 USB-capable players; filesystem and model-specific library requirements
 still apply. The [CDJ-350 specifications](https://www.pioneerdj.com/en/product/player/cdj-350/)

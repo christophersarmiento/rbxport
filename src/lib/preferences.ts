@@ -202,6 +202,12 @@ export interface AnalysisPreferences {
    * default, as it is in rekordbox.
    */
   writeKeyTag: boolean;
+  /**
+   * Key Analysis > "Analyze key": off keeps the keys a track already has, such
+   * as ones from Mixed In Key, for automatic analysis and as the default of
+   * the Analysis Setting window's KEY box. On by default.
+   */
+  detectKey: boolean;
 }
 
 /**
@@ -273,6 +279,14 @@ export interface AdvancedPreferences {
   relocateVideo: boolean;
   relocateDesktop: boolean;
   relocateUserFolders: boolean;
+  /**
+   * Browse › My Tag › Add "My Tag" to the "Comments" (#605): a track's My
+   * Tags are written after its comment in a slash-star block
+   * (`Comment /* Peak / Warm-up`, then a closing star-slash), as rekordbox's
+   * `writeMytag` does. Off by default, as it is in rekordbox. The switch
+   * rewrites every tagged track's comment before it changes.
+   */
+  myTagComments: boolean;
   /** Library Protection: refuse every edit, whatever rekordbox is doing. */
   protectLibrary: boolean;
   /** Edit Library › Double-click to edit; off is a click on a selected row. */
@@ -390,6 +404,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     firstBeatCue: false,
     bpmRange: "70-180",
     writeKeyTag: false,
+    detectKey: true,
   },
   djSystem: {
     waveformColor: "3band",
@@ -411,6 +426,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
     relocateVideo: true,
     relocateDesktop: true,
     relocateUserFolders: false,
+    myTagComments: false,
     protectLibrary: true,
     doubleClickToEdit: false,
     duplicateTracks: "ask",
@@ -570,6 +586,7 @@ export function sanitisePreferences(value: unknown): Preferences {
       firstBeatCue: bool(analysis.firstBeatCue, d.analysis.firstBeatCue),
       bpmRange: oneOf(analysis.bpmRange, BPM_RANGES, d.analysis.bpmRange),
       writeKeyTag: bool(analysis.writeKeyTag, d.analysis.writeKeyTag),
+      detectKey: bool(analysis.detectKey, d.analysis.detectKey),
     },
     djSystem: {
       waveformColor: oneOf(dj.waveformColor, WAVEFORM_COLORS, d.djSystem.waveformColor),
@@ -606,6 +623,7 @@ export function sanitisePreferences(value: unknown): Preferences {
       // that user's writable library; only a truly empty store gets defaults.
       protectLibrary: bool(advanced.protectLibrary, hasStoredSection ? false : d.advanced.protectLibrary),
       doubleClickToEdit: bool(advanced.doubleClickToEdit, d.advanced.doubleClickToEdit),
+      myTagComments: bool(advanced.myTagComments, d.advanced.myTagComments),
       duplicateTracks: oneOf(advanced.duplicateTracks, DUPLICATE_TRACKS, d.advanced.duplicateTracks),
       deviceImportMissing: oneOf(advanced.deviceImportMissing, DEVICE_IMPORT_MISSING, d.advanced.deviceImportMissing),
       folderDropClash: oneOf(advanced.folderDropClash, FOLDER_DROP_CLASH, d.advanced.folderDropClash),

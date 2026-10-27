@@ -36,9 +36,12 @@ export interface DualHeadProps {
   bpmX100: number;
   baseBpmX100: number;
   onBpmChange: (bpm: number) => void;
-  /** BEAT SYNC: pull this deck to the master. Disabled while this deck is it. */
+  /**
+   * BEAT SYNC: pull this deck to the master. The master's own can be lit as
+   * well, as in rekordbox, so it follows when the other deck takes MASTER.
+   */
   onBeatSync: () => void;
-  /** BEAT SYNC is lit: the deck is following the master's tempo. */
+  /** BEAT SYNC is lit. */
   synced: boolean;
   isMaster: boolean;
   onMaster: (() => void) | undefined;
@@ -102,7 +105,7 @@ export const DualHead = memo(function DualHead({
           aria-label="Beat sync"
           aria-pressed={synced}
           data-on={synced ? "" : undefined}
-          disabled={!track || isMaster}
+          disabled={!track}
           title={tip(
             isMaster
               ? "This deck is the master; sync the other one to it."
@@ -167,7 +170,10 @@ export interface DualLoop {
   idle: boolean;
   /** A loop range exists, playing or not. */
   hasLoop: boolean;
-  /** The length field: start a beat loop, or exit the one that plays. */
+  /**
+   * The length field: start a beat loop, exit the one it lit, or turn a
+   * memory, hot or manual loop that plays into a beat loop of its length.
+   */
   onToggle: () => void;
   onIn: () => void;
   onOut: () => void;
@@ -241,7 +247,9 @@ export const DualControls = memo(function DualControls({
 
       {/* The beat loop length — "Switch the page of beat length" in
           german.lang. The field starts a loop of that length, or exits the
-          loop that plays; a step changes the length of a playing loop. */}
+          beat loop it lit; a memory, hot or manual loop that plays becomes
+          a loop of that length from its in point. A step changes the length
+          of a playing loop. */}
       <div className={styles.loopLength} role="group" aria-label="Beat loop length">
         <button type="button" className={styles.step} aria-label="Shorter loop" disabled={loop.beats <= LOOP_BEATS_MIN} onClick={loop.onShorter}>‹</button>
         <button
@@ -249,8 +257,8 @@ export const DualControls = memo(function DualControls({
           className={styles.loopField}
           data-on={loop.beatLoopOn || undefined}
           aria-pressed={loop.beatLoopOn}
-          aria-label={loop.active ? "Exit loop" : `${loop.beats} beat loop`}
-          title={tip(loop.active ? "Exit the loop" : `${loopBeatsLabel(loop.beats)} Beat Loop`)}
+          aria-label={loop.beatLoopOn ? "Exit loop" : `${loop.beats} beat loop`}
+          title={tip(loop.beatLoopOn ? "Exit the loop" : `${loopBeatsLabel(loop.beats)} Beat Loop`)}
           disabled={!loop.canLoop}
           onClick={loop.onToggle}
         >

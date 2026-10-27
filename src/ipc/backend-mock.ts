@@ -569,7 +569,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return candidates;
   };
   const tree = makeTree(playlistFixture);
-  type MockEdit = { label: string; undo: () => void; redo: () => void };
+  type MockEdit = {
+    label: string; undo: () => void; redo: () => void;
+    /** An Add Tracks to Playlist still open to its next slice (#499). */
+    transaction?: string | undefined; playlist?: string; after?: string[];
+  };
   const editUndo: MockEdit[] = [];
   const editRedo: MockEdit[] = [];
 
@@ -632,6 +636,28 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return wait(generation);
   };
 
+  /**
+   * Remove from Tag List or Clear Tag List (#508): keeps the tracks `keep`
+   * passes, and records one entry whose Undo puts the list back as it was,
+   * refused, as the real backend refuses it, once the list changed since.
+   */
+  const recordTagListRemoval = (label: string, keep: (track: string) => boolean): Promise<number> => {
+    const before = [...tagList];
+    const after = before.filter(keep);
+    if (after.length === before.length) return wait(generation);
+    const setFrom = (expected: readonly string[], next: readonly string[]) => {
+      if (tagList.length !== expected.length || tagList.some((track, i) => track !== expected[i])) {
+        throw new Error("the Tag List has changed since");
+      }
+      tagList.splice(0, tagList.length, ...next);
+      for (const listener of tagListListeners) listener();
+    };
+    tagList.splice(0, tagList.length, ...after);
+    editUndo.push({ label, undo: () => setFrom(after, before), redo: () => setFrom(before, after) });
+    if (editUndo.length > 50) editUndo.shift();
+    return tagListChanged();
+  };
+
   // The library's My Tags. Edited in place by Adding My Tag, a rename and a
   // delete, as the real backend's table is.
   const myTagCategories: { id: string; name: string; tags: { id: string; name: string }[] }[] = [
@@ -639,6 +665,18 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     { id: "2", name: "Components", tags: [{ id: "t-synth", name: "Synth" }, { id: "t-vocal", name: "Vocal" }] },
   ];
   let nextMyTag = 0;
+
+  /**
+   * An add's or a reorder's Undo or Redo (#499): refused, as the real
+   * backend refuses it, unless the playlist holds exactly `expected`.
+   */
+  const setMembersFrom = (playlist: string, expected: readonly string[], next: readonly string[]) => {
+    const now = membersOf(playlist);
+    if (now.length !== expected.length || now.some((track, i) => track !== expected[i])) {
+      throw new Error("the playlist's tracks have changed since");
+    }
+    membership.set(playlist, [...next]);
+  };
 
   const recordEdit = async (edit: MockEdit): Promise<EditHistoryState> => {
     await bump(false);
@@ -662,6 +700,22 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       undo: () => { for (const step of [...steps].reverse()) step.undo(); },
       redo: () => { for (const step of steps) step.redo(); },
     });
+  };
+
+  /**
+   * One Relocate, Relocate by location or Auto Relocate run (#502): its
+   * tracks stop being missing, and one "Relocate" entry puts them all back
+   * (missing again) or forward, as the real backend records the run.
+   */
+  const recordRelocation = (rows: readonly RowDto[]): Promise<EditHistoryState> => {
+    const relink = (missing: boolean) => {
+      for (const row of rows) {
+        if (missing) row.missing = true;
+        else delete row.missing;
+      }
+    };
+    relink(false);
+    return recordEdit({ label: "Relocate", undo: () => relink(true), redo: () => relink(false) });
   };
 
   const setHasArtwork = (track: string, value: boolean) => {
@@ -952,18 +1006,48 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     };
   };
 
+  /**
+   * A playlist, folder or intelligent playlist just made, as one Undo step
+   * (#500). Undo takes the same node away unless something has been put in
+   * it since, which it refuses, as the real backend does; Redo puts it back
+   * in the place it had.
+   */
+  const recordCreation = async (id: string, parent: string, label: string): Promise<number> => {
+    const made = findNode(id);
+    // The flat tree's next node: what the made one goes back in front of.
+    const next = tree[tree.findIndex((n) => n.id === id) + 1]?.id;
+    const state = await recordEdit({
+      label,
+      undo: () => {
+        const at = tree.findIndex((n) => n.id === id);
+        if (at < 0) throw new Error("the playlist is no longer there");
+        if (subtreeLength(at) > 1) throw new Error("playlists have been added to the folder since");
+        if ((membership.get(id) ?? []).length > 0) throw new Error("tracks have been added to the playlist since");
+        tree.splice(at, 1);
+      },
+      redo: () => {
+        if (!made) return;
+        const at = next === undefined ? -1 : tree.findIndex((n) => n.id === next);
+        if (at < 0) insertUnder(parent, { ...made });
+        else tree.splice(at, 0, { ...made });
+      },
+    });
+    return state.generation;
+  };
+
   const edits: Edits = {
     createPlaylist: (name, parent, index) => {
       const depth = parent === TREE_ROOT ? 1 : (findNode(parent)?.depth ?? 0) + 1;
       const id = `made-${nextId++}`;
       membership.set(id, []);
       insertUnder(parent, { id, name, kind: "playlist", depth, childCount: 0 }, index);
-      return bump();
+      return recordCreation(id, parent, "Create Playlist");
     },
     createFolder: (name, parent) => {
       const depth = parent === TREE_ROOT ? 1 : (findNode(parent)?.depth ?? 0) + 1;
-      insertUnder(parent, { id: `made-${nextId++}`, name, kind: "folder", depth, expanded: true });
-      return bump();
+      const id = `made-${nextId++}`;
+      insertUnder(parent, { id, name, kind: "folder", depth, expanded: true });
+      return recordCreation(id, parent, "Create Folder");
     },
     // The mock keeps the rule and answers it back; it does not evaluate
     // one, so a made intelligent playlist opens empty here.
@@ -973,11 +1057,21 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       smartRules.set(id, rule);
       membership.set(id, []);
       insertUnder(parent, { id, name, kind: "smartPlaylist", depth, childCount: 0 });
-      return bump();
+      return recordCreation(id, parent, "Create Intelligent Playlist");
     },
-    setSmartRule: (playlist, rule) => {
+    setSmartRule: async (playlist, rule) => {
+      const before = smartRules.get(playlist);
       smartRules.set(playlist, rule);
-      return bump();
+      const restore = (value: SmartRule | undefined) => {
+        if (value === undefined) smartRules.delete(playlist);
+        else smartRules.set(playlist, value);
+      };
+      const state = await recordEdit({
+        label: "Edit Intelligent Playlist",
+        undo: () => restore(before),
+        redo: () => restore(rule),
+      });
+      return state.generation;
     },
     renamePlaylist: (id, name) => {
       const node = findNode(id);
@@ -1032,6 +1126,24 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         redo: () => restoreTree(afterTree),
       });
     },
+    sortItems: async (folder, language) => {
+      // The Playlists heading's run, or a folder's, one level down.
+      const at = folder === TREE_ROOT ? tree.findIndex((n) => n.kind === "collection") : tree.findIndex((n) => n.id === folder);
+      const head = tree[at];
+      if (!head || (folder !== TREE_ROOT && head.kind !== "folder")) throw new Error(`${folder} is not a folder`);
+      const blocks: TreeNode[][] = [];
+      const end = at + subtreeLength(at);
+      for (let i = at + 1; i < end; i += subtreeLength(i)) blocks.push(tree.slice(i, i + subtreeLength(i)));
+      // The backend uses ICU4X; the webview's Intl.Collator is ICU too, with
+      // the same defaults (tertiary, not numeric). The sort is stable.
+      const collator = new Intl.Collator(language);
+      const sorted = [...blocks].sort((a, b) => collator.compare(a[0]?.name ?? "", b[0]?.name ?? ""));
+      if (sorted.every((block, i) => block === blocks[i])) return historyState();
+      const before = treeSnapshot();
+      tree.splice(at + 1, end - at - 1, ...sorted.flat());
+      const afterTree = treeSnapshot();
+      return recordEdit({ label: "Sort Items", undo: () => restoreTree(before), redo: () => restoreTree(afterTree) });
+    },
     deletePlaylist: async (id) => {
       const beforeTree = treeSnapshot();
       const beforeMembership = membershipSnapshot();
@@ -1052,8 +1164,15 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     undoEdit: async () => {
       const edit = editUndo.at(-1);
       if (!edit) throw new Error("There is no library edit to undo.");
-      // A refused undo stays on the stack, as in the real backend.
-      edit.undo();
+      // A refused entry leaves the history and nothing else does, as in
+      // the real backend (#506).
+      try {
+        edit.undo();
+      } catch (e) {
+        editUndo.pop();
+        announceHistory();
+        return historyConflict("undo", edit.label, e);
+      }
       editUndo.pop();
       editRedo.push(edit);
       await bump(false);
@@ -1062,19 +1181,41 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     redoEdit: async () => {
       const edit = editRedo.at(-1);
       if (!edit) throw new Error("There is no library edit to redo.");
-      edit.redo();
+      try {
+        edit.redo();
+      } catch (e) {
+        editRedo.pop();
+        announceHistory();
+        return historyConflict("redo", edit.label, e);
+      }
       editRedo.pop();
       editUndo.push(edit);
       await bump(false);
       return announceHistory();
     },
-    addTracksToPlaylist: (playlist, tracks, allowDuplicates = false) => {
+    addTracksToPlaylist: async (playlist, tracks, allowDuplicates = false, transaction) => {
       // The real backend refuses while Rekordbox holds the database; the mock
       // never does, so the happy path is what `pnpm dev:mock` exercises.
+      const before = [...membersOf(playlist)];
       const current = membersOf(playlist);
       for (const track of tracks) if (allowDuplicates || !current.includes(track)) current.push(track);
       membership.set(playlist, current);
-      return bump();
+      const after = [...current];
+      if (after.length === before.length) return bump();
+      // A slice of the same add joins the entry its first slice made, as
+      // the real backend's history does (#499).
+      const open = editUndo.at(-1);
+      if (transaction && open?.transaction === transaction && open.playlist === playlist
+        && open.after?.join() === before.join()) {
+        open.after = after;
+        return bump();
+      }
+      const opened: MockEdit = {
+        label: "Add Tracks to Playlist", transaction, playlist, after,
+        undo: () => setMembersFrom(playlist, opened.after ?? after, before),
+        redo: () => setMembersFrom(playlist, before, opened.after ?? after),
+      };
+      return (await recordEdit(opened)).generation;
     },
     playlistDuplicates: (playlist, tracks) => {
       const current = new Set(membersOf(playlist));
@@ -1086,17 +1227,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       for (const track of tracks) if (!tagList.includes(track)) tagList.push(track);
       return tagListChanged();
     },
-    removeFromTagList: (tracks) => {
-      for (const track of tracks) {
-        const at = tagList.indexOf(track);
-        if (at >= 0) tagList.splice(at, 1);
-      }
-      return tagListChanged();
-    },
-    clearTagList: () => {
-      tagList.length = 0;
-      return tagListChanged();
-    },
+    // One Undo per removal or clear, as the real backend records them
+    // (#508); a removal of nothing records nothing.
+    removeFromTagList: (tracks) => recordTagListRemoval("Remove from Tag List", (t) => !tracks.includes(t)),
+    clearTagList: () => recordTagListRemoval("Clear Tag List", () => false),
     removeTracksFromPlaylist: (playlist, tracks) => {
       const before = [...membersOf(playlist)];
       const current = membersOf(playlist).filter((t) => !tracks.includes(t));
@@ -1152,8 +1286,15 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       // Mirrors the backend: tracks not named keep their place after the rest,
       // so a partial order cannot silently drop any.
       const named = tracks.filter((t) => current.includes(t));
-      membership.set(playlist, [...named, ...current.filter((t) => !named.includes(t))]);
-      return bump();
+      const after = [...named, ...current.filter((t) => !named.includes(t))];
+      const before = [...current];
+      membership.set(playlist, after);
+      if (after.join() === before.join()) return bump();
+      return recordEdit({
+        label: "Reorder Playlist",
+        undo: () => setMembersFrom(playlist, after, before),
+        redo: () => setMembersFrom(playlist, before, after),
+      }).then((history) => history.generation);
     },
     setTrackRating: (tracks, stars) => {
       const after = Math.max(0, Math.min(5, stars));
@@ -1216,6 +1357,9 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         apply(after);
         return { undo: () => apply(before), redo: () => apply(after) };
       }),
+    // The mock keeps no comment text for My Tags (#605); the run is still a
+    // step of history, as the real backend's is.
+    writeMyTagComments: () => recordEdit({ label: "Track Edit", undo: () => {}, redo: () => {} }),
     createMyTag: async (category) => {
       const into = myTagCategories.find((c) => c.id === category);
       if (!into) throw new Error(`no My Tag category ${category}`);
@@ -1247,7 +1391,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       editUndo.length = 0;
       return bump();
     },
-    addPlaylistArtwork: () => bump(),
+    // The mock keeps no playlist artwork; the step is in the history as the
+    // real backend's is (#500).
+    addPlaylistArtwork: async () =>
+      (await recordEdit({ label: "Add Artwork", undo: () => {}, redo: () => {} })).generation,
     addArtwork: (tracks) => recordTrackEdits(tracks, (track) => setHasArtwork(track, true)),
     clearArtwork: (tracks) => recordTrackEdits(tracks, (track) => setHasArtwork(track, false)),
     setTrackField: (tracks, field, value) => {
@@ -1274,7 +1421,22 @@ export function createMockBackend(options: MockOptions = {}): Backend {
           return Promise.reject(new Error(`${JSON.stringify(value)} is not a BPM between 20 and 400`));
         }
         const row = all.find((r) => r.id === tracks[0]);
-        if (row) {
+        const held = tracks[0] === undefined ? null : gridOf(tracks[0]);
+        if (row && held) {
+          // As the real backend (#505): the grid editor's Set Tempo over the
+          // whole track, one entry in the track's grid history.
+          if (held.locked) return refuse("The beat grid is locked. Unlock it to edit.");
+          const next = applyEditFrom(held.beats, null, { kind: "tempo", bpmX100: Math.round(bpm * 100), anchorMs: 0 }, row.durationSec * 1000);
+          if (!sameGrid(next, held.beats)) {
+            held.undo.push({ beats: held.beats, label: "Set Tempo" });
+            held.transaction = undefined;
+            held.redo = [];
+            held.beats = next;
+          }
+          row.bpmX100 = Math.round(bpm * 100);
+          detailsOf(row).bpmX100 = row.bpmX100;
+          for (const listener of gridListeners) listener(row.id);
+        } else if (row) {
           row.bpmX100 = Math.round(bpm * 100);
           detailsOf(row).bpmX100 = row.bpmX100;
         }
@@ -1664,6 +1826,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
   const failed = (kind: AppErrorDto["kind"], message: string) =>
     Promise.reject(Object.assign(new Error(message), { kind }));
   const refuse = (message: string) => failed("readOnly", message);
+  // An Undo or Redo refused because what it would write changed since, in
+  // the real backend's words.
+  const historyConflict = (action: "undo" | "redo", label: string, reason: unknown) =>
+    failed("conflict", `Can't ${action} ${label}: ${reason instanceof Error ? reason.message : String(reason)}. The newer change was kept.`);
   const notFound = (message: string) => failed("notFound", message);
 
   /*
@@ -2835,6 +3001,11 @@ export function createMockBackend(options: MockOptions = {}): Backend {
 
     // Analysis is real work in the app; here it just answers, so the queue's
     // sequencing and progress can be driven end to end without audio.
+    analysisStages: () => wait([
+      { id: "grid", label: "BPM / Grid", description: "", requires: ["core.audio"], produces: ["core.beat_grid"], defaultEnabled: true, requiresFullTrack: false, revision: "1" },
+      { id: "key", label: "KEY", description: "", requires: ["core.audio"], produces: ["core.key"], defaultEnabled: true, requiresFullTrack: false, revision: "1" },
+      { id: "waveform", label: "Waveform", description: "", requires: ["core.audio"], produces: ["core.waveform"], defaultEnabled: true, requiresFullTrack: false, revision: "1" },
+    ]),
     analyseTrack: (trackId, _mode, settings, _keyTag, drawing) => {
       const index = Number.parseInt(trackId, 10) - 100000;
       const row = all[index];
@@ -2993,8 +3164,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
           const listsUnder = () => childrenOf(parent).filter((n) => n.kind !== "history").map((n) => n.id);
           const afterIds = listsUnder();
           const root = nodes[0]?.id ?? "";
-          const refuse = (undo: boolean) => new Error(
-            `that replacement can no longer be ${undo ? "undone" : "redone"}`);
+          const refuse = (_undo: boolean) => new Error("the playlists have changed since");
           const sameList = (a: readonly string[], b: readonly string[]) =>
             a.length === b.length && a.every((value, i) => value === b[i]);
           // `entering` (a node and what is under it) put back right after the
@@ -3082,6 +3252,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         })),
       });
     },
+    trackMissing: (trackId) => {
+      const row = all.find((r) => r.id === trackId);
+      return wait(row ? row.missing === true : null);
+    },
     sortMissingTracks: (column, forwards) => {
       // `relocate::sorted_rows`, over the list as it stands: ICU's en-US
       // order, then the row's place, reversed forwards (rekordbox's
@@ -3164,10 +3338,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       const row = all.find((r) => r.id === trackId);
       const taken = all.some((r) => r.id !== trackId && r.missing !== true && String(r.extra?.location ?? "") === path);
       if (taken) return false;
-      if (row?.missing === true) {
-        delete row.missing;
-        await bump();
-      }
+      if (row?.missing === true) await recordRelocation([row]);
       return true;
     },
     relocationTargets: (tracks) => {
@@ -3189,8 +3360,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       const page = window as unknown as { __relocatedBy?: string[] };
       (page.__relocatedBy ??= []).push(`${from} -> ${to}`);
       const found = all.filter((row) => row.missing === true && tracks.includes(row.id));
-      for (const row of found) delete row.missing;
-      if (found.length > 0) await bump();
+      if (found.length > 0) await recordRelocation(found);
       return found.length;
     },
     // The search folders hold every other missing file, in list order, so a
@@ -3210,13 +3380,14 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       const searched = search.folders.length > 0 || search.music || search.video || search.desktop;
       const gone = all.filter((row) => row.missing === true && (tracks === null || tracks.includes(row.id)));
       const found = searched ? gone.filter((_, at) => at % 2 === 0) : [];
-      for (const row of found) delete row.missing;
-      if (found.length > 0) await bump();
+      if (found.length > 0) await recordRelocation(found);
       return { relocated: found.length, unresolved: gone.length - found.length, inCollection: [], inCollectionTotal: 0 };
     },
     // No dialogs in a browser: the folder is a fixed one, so the search
     // folders list can be driven end to end.
-    pickFolder: () => wait("/Users/mock/Music/Moved"),
+    pickFolder: () => wait((typeof window !== "undefined"
+      ? (window as unknown as { __mockPickedFolder?: string }).__mockPickedFolder
+      : undefined) ?? "/Users/mock/Music/Moved"),
     pickImage: () => wait("/Users/mock/Pictures/cover.jpg"),
     // No windows in a browser: the shell draws the Preferences over itself,
     // and its resets are its own to do.
@@ -3362,6 +3533,8 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     },
     // The fake disk above. Copies, as with the tree: the map is the mock's.
     deviceLibraries: (path) => wait(stickLibraries.libraries(path)),
+    devicePlaylistCollectionTracks: (path, format, tracks) =>
+      wait(stickLibraries.collectionTracks(path, format, tracks, [...(looseTracks.get(path) ?? [])])),
     devicePlaylistEdit: (path, format, edit) => {
       try {
         return wait(stickLibraries.edit(path, format, edit));
@@ -3381,8 +3554,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     // there, with the stick's entries in its order. An entry whose track
     // the collection lacks is copied in as a new track (one per stick
     // file), left out, or stops the import, as `missing` says.
-    devicePlaylistImport: (path, format, id, missing) => {
+    devicePlaylistImport: (path, format, id, missing, destination) => {
       if (!ready) return notReady();
+      // Where the copies would go, for the spec of rekordbox's Change….
+      if (typeof window !== "undefined") {
+        (window as unknown as { __deviceImportDestination?: string | null }).__deviceImportDestination = destination ?? null;
+      }
       let source: { name: string; entries: MockImportEntry[] };
       try {
         source = stickLibraries.playlist(path, format, id);
@@ -3391,7 +3568,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }
       const held = (entry: MockImportEntry) => entry.master !== null && all.some((r) => r.id === entry.master);
       const lacking = source.entries.filter((entry) => !held(entry)).length;
-      const none = (cancelled: boolean) => wait({ id: null, name: source.name, renamed: false, tracks: 0, missing: lacking, copied: 0, cancelled });
+      const none = (cancelled: boolean) => wait({ id: null, name: source.name, renamed: false, tracks: 0, missing: lacking, copied: 0, analysed: 0, analysisFailed: 0, cancelled });
       if (lacking > 0 && missing === "cancel") return none(true);
       const copiedFrom = new Map<string, string>();
       const contents: string[] = [];
@@ -3418,10 +3595,13 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       membership.set(made, contents);
       insertUnder(TREE_ROOT, { id: made, name, kind: "playlist", depth: 1, childCount: contents.length });
       return bump().then(() => ({
-        id: made, name, renamed: name !== source.name, tracks: contents.length, missing: lacking, copied: copiedFrom.size, cancelled: false,
+        // The copies keep the stick row's BPM, key and cues, as the real
+        // backend gives them the stick's analysis.
+        id: made, name, renamed: name !== source.name, tracks: contents.length, missing: lacking, copied: copiedFrom.size,
+        analysed: copiedFrom.size, analysisFailed: 0, cancelled: false,
       }));
     },
-    devicePlaylistImportPlan: (path, format, id) => {
+    devicePlaylistImportPlan: (path, format, id, destination) => {
       let source: { name: string; entries: MockImportEntry[] };
       try {
         source = stickLibraries.playlist(path, format, id);
@@ -3432,7 +3612,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       const files = new Set(lacking.map((entry) => entry.row.id)).size;
       return wait({
         name: source.name, listed: source.entries.length, missing: lacking.length, files,
-        bytes: files * 9_437_184, destination: "/Users/dj/Music/PioneerDJ/Imported from Device", freeBytes: 128 * 1024 ** 3,
+        bytes: files * 9_437_184, destination: destination ?? "/Users/dj/Music/PioneerDJ/Imported from Device",
+        // A spec can make a picked folder's drive too small, for the OK
+        // rekordbox greys out when the files do not fit.
+        freeBytes: (destination && typeof window !== "undefined"
+          ? (window as unknown as { __mockPickedFreeBytes?: number }).__mockPickedFreeBytes
+          : undefined) ?? 128 * 1024 ** 3,
       });
     },
     explorerRoots: () => wait(EXPLORER_ROOTS.map((root) => ({ ...root }))),
@@ -3454,6 +3639,49 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       if (!row) return Promise.reject(new Error("That track is no longer in the library."));
       // A copy: the panel must not be able to edit the backend's own record.
       return wait({ ...detailsOf(row) });
+    },
+    trackPlaylists: (trackId) => {
+      if (!ready) return notReady();
+      // Folder names above a playlist, as the real command's `path` holds
+      // them: ancestors walked back up the flat tree, joined and not named.
+      const pathOf = (id: string): string => {
+        let at = tree.findIndex((node) => node.id === id);
+        if (at < 0) return "";
+        let depth = tree[at]?.depth ?? 0;
+        const parents: string[] = [];
+        while (depth > 1) {
+          let holder = -1;
+          for (let i = at - 1; i >= 0; i -= 1) {
+            if ((tree[i]?.depth ?? 0) < depth) { holder = i; break; }
+          }
+          const parent = holder < 0 ? undefined : tree[holder];
+          if (parent?.kind !== "folder") break;
+          parents.push(parent.name);
+          at = holder;
+          depth = parent.depth;
+        }
+        return parents.reverse().join(" / ");
+      };
+      const seen = new Set<string>();
+      const result: { id: string; name: string; path: string }[] = [];
+      const add = (id: string) => {
+        if (seen.has(id)) return;
+        const node = tree.find((n) => n.id === id);
+        if (!node || (node.kind !== "playlist" && node.kind !== "smartPlaylist")) return;
+        seen.add(id);
+        result.push({ id, name: node.name, path: pathOf(id) });
+      };
+      for (const [id, members] of membership) {
+        if (members.includes(trackId)) add(id);
+      }
+      for (const node of tree) {
+        if (node.kind !== "playlist" && node.kind !== "smartPlaylist") continue;
+        if (membership.has(node.id)) continue;
+        const seeded = seededMembers(node.id).map((i) => all[i]?.id ?? "");
+        if (seeded.includes(trackId)) add(node.id);
+      }
+      // The real command's order the row repeats: path first, name second.
+      return wait(result.sort((a, b) => a.path.localeCompare(b.path) || a.name.localeCompare(b.name)));
     },
     selectionDetails: (trackIds) => {
       if (!ready) return notReady();

@@ -9,7 +9,7 @@ import { SearchField } from "@/components/SearchField";
 import { TREE_SEARCH_OPTIONS } from "@/lib/search";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TreeNode } from "@/ipc/types";
+import { TREE_ROOT, type TreeNode } from "@/ipc/types";
 import styles from "./TreeView.module.css";
 import { DeviceIcon, EjectIcon, FolderIcon, HistoryIcon, ListIcon, NoteIcon, SmartListIcon } from "@/components/icons";
 import { ContextMenu } from "@/components/ContextMenu";
@@ -79,7 +79,8 @@ function RenameField({ name, onCommit, onCancel }: {
 }
 
 const Row = memo(function Row({
-  node, selected, branch, open, onSelect, onToggle, droppable, onDropTracks, onDropFiles, onMenu, count,
+  node, selected, branch, open, onSelect, onToggle, droppable, deviceDroppable, onDropTracks, onDropDeviceTracks,
+  onDropFiles, onMenu, count,
   renaming, onRename, onRenameEnd, onRenameStart, doubleClickToEdit,
   movable, moveEdge, onMoveStart, onMoveOver, onMoveDrop, onMoveEnd,
   onEjectDevice, ejecting, deviceBusy, tracksToDevice, onDropTracksOnDevice, playlistToDevice, onDropNodeOnDevice,
@@ -107,7 +108,10 @@ const Row = memo(function Row({
   count: number | undefined;
   /** Whether a track drag could land here. */
   droppable: boolean;
+  /** Whether collection tracks can be exported into this device playlist. */
+  deviceDroppable: boolean;
   onDropTracks: ((playlistId: string) => void) | undefined;
+  onDropDeviceTracks: (() => void) | undefined;
   /**
    * Files dragged in from outside the app, dropped on this row: a playlist's
    * id, or the Playlists root's (`"playlists"`) or a playlist folder's, where
@@ -161,8 +165,8 @@ const Row = memo(function Row({
   const fileDroppable = Boolean(onDropFiles)
     && (node.kind === "playlist" || node.kind === "folder" || node.id === "playlists");
   useEffect(() => {
-    if (!droppable && !fileDroppable && tracksToDevice === null && playlistToDevice === null) setOver(false);
-  }, [droppable, fileDroppable, tracksToDevice, playlistToDevice]);
+    if (!droppable && !deviceDroppable && !fileDroppable && tracksToDevice === null && playlistToDevice === null) setOver(false);
+  }, [droppable, deviceDroppable, fileDroppable, tracksToDevice, playlistToDevice]);
   /** A playlist or folder from either tree is in hand, and this stick takes it. */
   const takesNode = (e: React.DragEvent<HTMLDivElement>) =>
     playlistToDevice !== null && e.dataTransfer.types.includes(TREE_NODE_DRAG);
@@ -196,7 +200,7 @@ const Row = memo(function Row({
     // A file drag from outside the app: `dataTransfer.files` is empty
     // until the drop, but `types` carries "Files" throughout, which is
     // the browser's own signal that this is worth taking.
-    if (!droppable && fileDroppable && e.dataTransfer.types.includes("Files")) {
+    if (!droppable && !deviceDroppable && fileDroppable && e.dataTransfer.types.includes("Files")) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
       setOver(true);
@@ -204,7 +208,7 @@ const Row = memo(function Row({
     }
     // Only a playlist takes tracks: a folder holds playlists, and dropping
     // into one would have to invent which.
-    if (!droppable) return;
+    if (!droppable && !deviceDroppable) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
     setOver(true);
@@ -266,14 +270,15 @@ const Row = memo(function Row({
           onMoveDrop();
           return;
         }
-        if (!droppable && fileDroppable && e.dataTransfer.files.length > 0) {
+        if (!droppable && !deviceDroppable && fileDroppable && e.dataTransfer.files.length > 0) {
           e.preventDefault();
           onDropFiles?.(node.id, Array.from(e.dataTransfer.files));
           return;
         }
-        if (!droppable) return;
+        if (!droppable && !deviceDroppable) return;
         e.preventDefault();
-        onDropTracks?.(node.id);
+        if (deviceDroppable) onDropDeviceTracks?.();
+        else onDropTracks?.(node.id);
       }}
       data-move={moveEdge ?? undefined}
       onContextMenu={(e) => {
@@ -283,8 +288,9 @@ const Row = memo(function Row({
         e.preventDefault();
         onMenu(node, { x: e.clientX, y: e.clientY });
       }}
-      data-droppable={(droppable || fileDroppable || tracksToDevice !== null) || undefined}
-      data-over={((droppable || fileDroppable || tracksToDevice !== null || playlistToDevice !== null) && over) || undefined}
+      data-droppable={(droppable || deviceDroppable || fileDroppable || tracksToDevice !== null) || undefined}
+      data-device-track-drop={deviceDroppable || undefined}
+      data-over={((droppable || deviceDroppable || fileDroppable || tracksToDevice !== null || playlistToDevice !== null) && over) || undefined}
       role="treeitem"
       aria-selected={selected}
       aria-expanded={branch ? open : undefined}
@@ -404,8 +410,12 @@ export interface TreeViewProps {
   showCounts?: boolean;
   /** True while tracks are being dragged, so playlists can offer themselves. */
   dragging?: boolean;
+  /** Collection track ids can be exported into a USB playlist. */
+  canDropToDevicePlaylists?: boolean;
   /** Drop the dragged tracks onto a playlist. */
   onDropTracks?: (playlistId: string) => void;
+  /** Export collection tracks to the stick, then add them to this playlist. */
+  onDropDeviceTracks?: (node: TreeNode) => void;
   /**
    * The tracks in hand are the collection's, so a stick in the Devices tree
    * can take them; files the library does not hold, and a stick's own
@@ -435,8 +445,18 @@ export interface TreeViewProps {
   onEditSmartPlaylist?: (node: TreeNode) => void;
   /** Add Artwork on a playlist or folder. */
   onAddArtwork?: (node: TreeNode) => void;
-  /** Sort Items: a folder's children put in name order. */
-  onSortItems?: (folder: TreeNode) => void;
+  /**
+   * Sort Items: a folder's, or the Playlists heading's, children put in name
+   * order. `searching` is true when it was asked for over the tree's search
+   * results, which rekordbox refuses.
+   */
+  onSortItems?: (folder: TreeNode, searching?: boolean) => void;
+  /**
+   * Whether the tree's search field holds a query, each time that changes:
+   * Sort Items started from a key or the menu bar refuses over a searched
+   * tree as the menu's does.
+   */
+  onSearchingChange?: (searching: boolean) => void;
   /** Add To Shortcut: the rail takes the node as a button of its own. */
   onAddToShortcut?: (node: TreeNode) => void;
   /** The rail's shortcut buttons, what opens one, and what deletes one. */
@@ -459,12 +479,13 @@ export interface TreeViewProps {
 }
 
 export const TreeView = memo(function TreeView({
-  nodes, selectedId, side = "main", onSelect, dragging, onDropTracks, onDropFiles, onExport, exportDevices, onExportFile,
+  nodes, selectedId, side = "main", onSelect, dragging, canDropToDevicePlaylists, onDropTracks, onDropDeviceTracks,
+  onDropFiles, onExport, exportDevices, onExportFile,
   draggingToDevice = false, onDropTracksOnDevice,
   onCreatePlaylist, onCreateFolder, onDeleteNode, onRenameNode, onMoveNode, readOnly = false,
   onExpand, showCounts = false, onOpenSync,
   initialExpansion, onExpansionChange,
-  onCreateSmartPlaylist, onEditSmartPlaylist, onAddArtwork, onAddToShortcut, onSortItems,
+  onCreateSmartPlaylist, onEditSmartPlaylist, onAddArtwork, onAddToShortcut, onSortItems, onSearchingChange,
   railShortcuts, onOpenShortcut, onDeleteShortcut,
   onEjectDevice, ejectingDeviceId, deviceBusy = false,
   onDeviceCreate, onDeviceRename, onDeviceDelete, onDeviceImport,
@@ -474,6 +495,8 @@ export const TreeView = memo(function TreeView({
   const listVars = browseListVars(view, TREE_ROW_H);
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<TreeSearchScope>("all");
+  const searched = query.trim() !== "";
+  useEffect(() => onSearchingChange?.(searched), [searched, onSearchingChange]);
   /** The tree menu: where it is, and which node it was opened on. */
   const [menu, setMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
 
@@ -700,7 +723,9 @@ export const TreeView = memo(function TreeView({
             onSelect={onSelect}
             onToggle={onToggle}
             droppable={Boolean(dragging) && node.kind === "playlist"}
+            deviceDroppable={Boolean(dragging && canDropToDevicePlaylists && onDropDeviceTracks) && node.kind === "devicePlaylist"}
             onDropTracks={onDropTracks}
+            onDropDeviceTracks={onDropDeviceTracks ? () => onDropDeviceTracks(node) : undefined}
             onDropFiles={onDropFiles}
             onMenu={(node, at) => setMenu({ ...at, node })}
             count={showCounts && (node.kind === "playlist" || node.kind === "devicePlaylist") ? node.childCount : undefined}
@@ -769,6 +794,7 @@ export const TreeView = memo(function TreeView({
           rows={treeMenu(
             menu.node.kind === "collection" ? "collection" : menu.node.kind === "folder" ? "folder" : menu.node.kind === "smartPlaylist" ? "smartPlaylist" : "playlist",
             exportDevices,
+            childrenOf(nodes, menu.node.kind === "collection" ? TREE_ROOT : menu.node.id).length > 0,
           )}
           label={menu.node.kind === "folder" ? "Folder" : menu.node.kind === "collection" ? "Playlists" : "Playlist"}
           context={{ inPlaylist: true, hasFile: true, readOnly }}
@@ -803,7 +829,7 @@ export const TreeView = memo(function TreeView({
                 onAddToShortcut?.(menu.node);
                 break;
               case "sortItems":
-                onSortItems?.(menu.node);
+                onSortItems?.(menu.node, searched);
                 break;
               case "rename":
                 beginRename(menu.node);

@@ -323,12 +323,26 @@ DBID go at `0x14` and `0x18`, the same two numbers as `exportLibrary.db`'s
 all 1563 tracks agree between the two databases; `0x04` there equals
 `content.contentLink`, `0xc0700` on all but one track, and the byte at
 `0x56` equals `content.analysedBits`, 41]. The writer fills `0x14` and
-`0x18` (#342). It leaves `0x04` at 0, as it leaves `contentLink` empty in
-`exportLibrary.db`: what rekordbox derives the value from is [UNKNOWN].
+`0x18` (#342), and `0x04` with the same value as `contentLink` (#640):
+the library row's `ContentLink & 0xc1600 | 0x100`, as rekordbox 7.2.19's
+`DatabaseMediator::export_track_data_to_db` (`0x1009b84dc`) computes it.
+Those bits are what rekordbox reads as current analysis:
+`RowDataTrack::isAnalyzedOldVer` (`0x10008a5b0`) wants `0x200`, `0x400`,
+`0x40000` and `0x80000` (`0xc0000` is the 3-band waveform, which
+`clear3BandAnalyzed` clears) and `Analysed & 0x20`. A zero link made
+rekordbox say "Some tracks in the device were analyzed by an older version
+of rekordbox." A track kept from the stick keeps the stick's value.
 
-String slots: 0 ISRC, 7 hot-cue auto-load, 10 date added, 11 release date, 12 mix name, 14
-analyze path, 15 analyze date, 16 comment, 17 title, 19 filename, 20 file
+String slots: 0 ISRC, 7 hot-cue auto-load, 10 date created, 11 release date, 12 mix name, 14
+analyze path, 15 date added, 16 comment, 17 title, 19 filename, 20 file
 path. **Unused slots must point at a real empty string, not at 0**.
+
+Slot 15 is what a player shows and sorts as DATE ADDED: rekordbox's
+`StockDate`. Slot 10 holds `DateCreated`, the file's creation date
+[OBS rekordbox 7 export, XDJ-1000: a track with DateCreated 2025-08-07 and
+StockDate 2025-08-12 shows 2025-08-12 under DATE ADDED; with slot 15 empty
+the column shows only its icon and the list is not sorted by date]. Older
+references name slot 15 the analyze date.
 
 Slot 7 contains `"ON"` when the source track enables hot-cue auto-load,
 otherwise an empty string. This must agree with OneLibrary's
@@ -383,9 +397,26 @@ was the cause; both now match rekordbox].
 
 The exact rows are embedded in Appendix A.
 
-`columns`, `history_playlists` and `history_entries` are written as captured
-rekordbox bytes rather than re-encoded, to stop drift;
-the column names are UTF-16 wrapped in `0xfffa`/`0xfffb` markers.
+`columns` is written as captured rekordbox bytes rather than re-encoded, to
+stop drift; the column names are UTF-16 wrapped in `0xfffa`/`0xfffb` markers.
+
+### Browse categories and sorts (types 17 and 18)
+
+These two tables hold the device panel's Category, Sort and Column tabs. A
+player that reads only `export.pdb`, such as the XDJ-1000, takes its browse
+menu from them, not from `exportLibrary.db` (#619). Appendix A has the rows at
+rekordbox's defaults. An export and a device-panel save encode the stick's own
+settings (`rbl_export::menu_rows`): the hidden rows by id, then the shown rows
+by position.
+
+| Table | Row (8 bytes) |
+|---|---|
+| `categories` (17) | `u16` menu item, `u16` `category_id`, a byte fixed per menu item (99 for most), flags (bit 0 hidden), `u16` position among the shown rows (0 when hidden) |
+| `sorts` (18) | `u16` menu item, `u16` `sort_id`, flags (bit 0 off, bit 1 the column beside the track name), `u8` position among the active rows (0 when off), `u16` 0 |
+
+What the per-item byte and the upper category flag bits (MATCHING carries
+bit 1) mean is [UNKNOWN]. They did not change when a category was shown
+[OBS rekordbox 7, #619], so they are taken from the reference rows.
 
 ### `property` row (type 19)
 
@@ -1011,7 +1042,8 @@ the pad recalls the saved cue.
 
 ## 13. Still unknown
 
-- The derivation of `myTagMasterDBID` (rekordbox wrote `1744129535`), and a
+- Whether the reference library's `myTagMasterDBID` (`1744129535`) is its
+  cloud database id, as the static derivation (#640) predicts, and a
   hardware check that a player lists My Tags from rbxport's `exportExt.pdb`
   type-4 rows (which match a rekordbox 7 export's byte for byte).
 - `PWV4` header bytes 1–2, the third header word of `PWV3`/`PWV5`, and the
@@ -1132,10 +1164,18 @@ specified below. Exported file type always describes the destination audio.
 | BitDepth | u16 `0x52` | `bitDepth` |
 | DJPlayCount | u16 `0x4e` (clamped to 65,535) | `djPlayCount` |
 | Analysed | No corresponding mapping here | `analysedBits = Analysed & ~64` |
+| ContentLink | u32 `0x04` | `contentLink`, both `ContentLink & 0xc1600 \| 0x100` |
 | HotCueAutoLoad equals lowercase `on` | Slot 7 `ON`, otherwise empty | `isHotCueAutoLoadOn` 1 or 0 |
 | DateCreated | Separate date-added slot is retained | `dateCreated` |
 | ISRC | String slot 0 | `isrc` |
 | Final filename extension | u16 `0x5a` | `fileType` |
+
+A track the stick keeps is read back from `exportLibrary.db` before the
+rewrite. A negative `analysedBits` there, as on users' sticks (-23 in #545
+and #583), is read as its low byte (`0xE9`) rather than stopping the
+sync; the byte is the same one `export.pdb` holds at `0x56`. Whether
+rekordbox writes such values signed, and what it writes them back as, is
+[UNKNOWN].
 
 | OneLibrary cue column | Value |
 |---|---|
@@ -1153,8 +1193,14 @@ specified below. Exported file type always describes the destination audio.
 
 Leave the uncharacterized type-5 table empty.
 
-Use the library `DBID`, and the same number must appear in
-`exportLibrary.db`'s `property.myTagMasterDBID`.
+Use the library's cloud database id when it has one (the `ID` of its live
+`djmdCloudProperty` row whose `Reserved1` is `SyncService`), otherwise its
+`DBID` plus one (a 32-bit add), and put the same number in
+`exportLibrary.db`'s `property.myTagMasterDBID`. That is what rekordbox
+7.2.19's `DatabaseMediator::syncMyTagLocal` (`0x100c529c4`) writes. Its
+`syncMyTag` (`0x100c520ec`) takes a stick holding the plain `DBID` as one
+rekordbox 6 tagged and says "You have to resync My Tag after starting
+rekordbox 6." (#640; static analysis of the arm64 build).
 
 #### OneLibrary publication
 
@@ -1234,6 +1280,20 @@ is refused when the file changed while it was staged.
 If different audio paths collide on the hash,
 suffix the audio filename and
 recompute, including checks against retained analysis directories.
+
+rekordbox resolves the same collision differently: it keeps the path and
+writes the second track's analysis as `ANLZ0001.*` in the same directory.
+A player tries `ANLZ0000` to `ANLZ0010` there and takes the file whose
+`PPTH` names the track. A retained device-only track keeps that slot, and
+its slot file is never overwritten with `ANLZ0000` (#599, #616). It holds
+only that slot: a selected track whose path hashes to the same directory
+still gets `ANLZ0000` there and keeps its path, instead of being renamed
+and copied again.
+
+A retained device-only track also keeps its audio path. When a selected
+track lays out on that path, the selected track gets the suffix. rekordbox
+likewise never replaces a file that is already at a track's device path
+(`DatabaseMediator::calc_device_file_path`).
 
 #### Analysis export transformation
 
